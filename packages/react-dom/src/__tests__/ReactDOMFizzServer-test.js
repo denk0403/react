@@ -1239,14 +1239,10 @@ describe('ReactDOMFizzServer', () => {
     );
   });
 
-  it('does not produce a hydration mismatch when context updates in an already-hydrated ancestor before a streamed boundary hydrates', async () => {
-    // Regression test: Updating a context value in an already-hydrated ancestor
-    // (via a state update on a provider with referentially stable children)
-    // before a streamed Suspense child that reads that context finishes
-    // streaming used to cause a hydration mismatch. The streamed segment was
-    // rendered on the server with the initial context value, but the client
-    // hydrated it against the updated context. React should recover without a
-    // mismatch error.
+  it('hydrates without a mismatch when context updates before a streamed boundary resolves', async () => {
+    // If a context provider updates after the shell hydrates but before a
+    // streamed Suspense boundary resolves, the boundary should client-render
+    // with the new value instead of hydrating against the server snapshot.
 
     const NumberContext = React.createContext(0);
     let setNumberExternal = null;
