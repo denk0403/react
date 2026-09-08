@@ -4039,31 +4039,32 @@ function attemptEarlyBailoutIfNoScheduledUpdate(
     case SuspenseComponent: {
       const state: SuspenseState | null = workInProgress.memoizedState;
       if (state !== null) {
+        // Context changes may not have been propagated yet. We need to do
+        // that before deciding whether to bail out. A dehydrated boundary's
+        // consumers aren't available, so propagation conservatively marks its
+        // child lanes when a parent context changes. A client-rendered boundary
+        // may have discarded its primary children's consumer fibers when they
+        // suspended during initial mount. Use the return value to conservatively
+        // retry in that case, even without child lanes, so the re-mounted
+        // children read the updated context value.
+        const contextChanged = lazilyPropagateParentContextChanges(
+          current,
+          workInProgress,
+          renderLanes,
+        );
+
         if (state.dehydrated !== null) {
-          // Before we bail out on a dehydrated boundary, we need to check
-          // whether a parent provider's context changed. The boundary's
-          // children only exist as server-rendered HTML, so normal propagation
-          // can't find context consumers inside it. If we bail out without
-          // propagating, a context change in an already-hydrated ancestor
-          // (e.g. a `useState` update in a provider with referentially stable
-          // children) will never be recorded on this boundary. When the
-          // streamed content later arrives and hydrates, it would read the
-          // updated context value and mismatch the server HTML. By propagating
-          // now, the boundary's childLanes records the change and
-          // `updateDehydratedSuspenseComponent` can recover instead of
-          // producing a hydration mismatch.
-          const contextChanged = lazilyPropagateParentContextChanges(
-            current,
-            workInProgress,
-            renderLanes,
-          );
-          if (contextChanged) {
+          // Context propagation marks child lanes when this boundary's inputs
+          // may have changed. Enter the update path to hydrate first or switch
+          // to client rendering instead of bailing out with stale inputs.
+          if (includesSomeLane(renderLanes, workInProgress.childLanes)) {
             return updateSuspenseComponent(
               current,
               workInProgress,
               renderLanes,
             );
           }
+
           // We're not going to render the children, so this is just to maintain
           // push/pop symmetry
           pushPrimaryTreeSuspenseHandler(workInProgress);
@@ -4080,17 +4081,6 @@ function attemptEarlyBailoutIfNoScheduledUpdate(
         // whether to retry the primary children, or to skip over it and
         // go straight to the fallback. Check the priority of the primary
         // child fragment.
-        //
-        // Propagate context changes first. If a parent context changed
-        // and the primary children's consumer fibers were discarded
-        // during initial mount suspension, normal propagation can't find
-        // them. In that case we conservatively retry the boundary — the
-        // re-mounted children will read the updated context value.
-        const contextChanged = lazilyPropagateParentContextChanges(
-          current,
-          workInProgress,
-          renderLanes,
-        );
         const primaryChildFragment: Fiber = workInProgress.child as any;
         const primaryChildLanes = primaryChildFragment.childLanes;
         if (
