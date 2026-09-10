@@ -1330,6 +1330,103 @@ describe('ReactDOMFizzServer', () => {
     );
   });
 
+  it('updates context in the fallback while a Suspense boundary is still streaming', async () => {
+    const NumberContext = React.createContext(0);
+    let setNumberExternal = null;
+
+    function NumberProvider({children}) {
+      const [number, setNumber] = React.useState(0);
+      setNumberExternal = setNumber;
+      return (
+        <NumberContext.Provider value={number}>
+          <div>Number: {number}</div>
+          {children}
+        </NumberContext.Provider>
+      );
+    }
+
+    function Fallback() {
+      const number = React.useContext(NumberContext);
+      return <div>Loading: {number}</div>;
+    }
+
+    function Content() {
+      readText('content');
+      return <div>Content</div>;
+    }
+
+    function App() {
+      return (
+        <div>
+          <NumberProvider>
+            <Suspense fallback={<Fallback />}>
+              <Content />
+            </Suspense>
+          </NumberProvider>
+        </div>
+      );
+    }
+
+    await act(() => {
+      const {pipe} = renderToPipeableStream(<App />);
+      pipe(writable);
+    });
+
+    expect(getVisibleChildren(container)).toEqual(
+      <div>
+        <div>Number: {'0'}</div>
+        <div>Loading: {'0'}</div>
+      </div>,
+    );
+
+    // Hydration uses Fiber instead of Fizz. Avoid the warning about multiple
+    // renderers concurrently using this context.
+    NumberContext._currentRenderer = null;
+
+    const errors = [];
+    ReactDOMClient.hydrateRoot(container, <App />, {
+      onRecoverableError(error) {
+        errors.push(normalizeError(error.message));
+      },
+    });
+    await waitForAll([]);
+
+    expect(getVisibleChildren(container)).toEqual(
+      <div>
+        <div>Number: {'0'}</div>
+        <div>Loading: {'0'}</div>
+      </div>,
+    );
+
+    // The shell is hydrated, but the boundary is still streaming. Its props
+    // stay the same because NumberProvider reuses its children. An urgent
+    // context update should client-render the fallback with the new value.
+    await clientAct(() => {
+      setNumberExternal(1);
+    });
+
+    expect(getVisibleChildren(container)).toEqual(
+      <div>
+        <div>Number: {'1'}</div>
+        <div>Loading: {'1'}</div>
+      </div>,
+    );
+    expect(errors).toEqual([]);
+
+    await act(() => {
+      resolveText('content');
+    });
+    await clientAct(async () => {});
+
+    expect(getVisibleChildren(container)).toEqual(
+      <div>
+        <div>Number: {'1'}</div>
+        <div>Content</div>
+      </div>,
+    );
+    expect(errors).toEqual([]);
+  });
+
   it('#23331: does not warn about hydration mismatches if something suspended in an earlier sibling', async () => {
     const makeApp = () => {
       let resolve;
